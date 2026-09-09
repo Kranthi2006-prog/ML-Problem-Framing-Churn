@@ -1,5 +1,5 @@
 **Problem:
-Predict which customers are likely to churn.
+Predict which customers are likely to churn. 
 
 Decision:
 Who should receive a retention intervention?
