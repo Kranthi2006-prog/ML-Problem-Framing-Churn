@@ -1,4 +1,11 @@
 from pydantic import BaseModel, Field
+from typing import Any, Dict
+
+class PredictionRequest(BaseModel):
+    features: Dict[str, Any] = Field(
+        ...,
+        description="Feature names and values required by the trained model."
+    )
 
 
 class CustomerInput(BaseModel):

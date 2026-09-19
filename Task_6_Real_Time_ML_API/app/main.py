@@ -1,10 +1,11 @@
 from pathlib import Path
+from typing import Any
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
-from app.schemas import CustomerInput
+from app.schemas import PredictionRequest
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,34 +35,95 @@ def health():
         "status": "healthy"
     }
 
+@app.get("/model-info")
+def model_info():
+    feature_names = getattr(model, "feature_names_in_", None)
 
-@app.post("/predict")
-def predict(customer: CustomerInput):
-
-    input_data = pd.DataFrame([{
-        "tenure_months": customer.tenure_months,
-        "support_tickets": customer.support_tickets,
-        "monthly_spend_inr": customer.monthly_spend_inr,
-        "last_login_days": customer.last_login_days,
-        "plan_type": customer.plan_type
-    }])
-
-    prediction = model.predict(input_data)[0]
-
-    probabilities = model.predict_proba(input_data)[0]
-
-    probability_not_churn = float(probabilities[0])
-    probability_churn = float(probabilities[1])
-
-    prediction_label = (
-        "Churned"
-        if prediction == 1
-        else "Not Churned"
-    )
+    if feature_names is not None:
+        features = list(feature_names)
+    else:
+        features = []
 
     return {
-        "prediction": int(prediction),
-        "prediction_label": prediction_label,
-        "probability_churn": probability_churn,
-        "probability_not_churn": probability_not_churn
+        "model_type": type(model).__name__,
+        "expected_features": features,
+        "feature_count": len(features)
     }
+
+
+@app.post("/predict")
+def predict(request: PredictionRequest):
+    try:
+        input_data = pd.DataFrame([request.features])
+
+        expected_features = getattr(model, "feature_names_in_", None)
+
+        if expected_features is not None:
+            expected_features = list(expected_features)
+
+            received_features = list(request.features.keys())
+
+            missing_features = [
+                feature
+                for feature in expected_features
+                if feature not in received_features
+            ]
+
+            unexpected_features = [
+                feature
+                for feature in received_features
+                if feature not in expected_features
+            ]
+
+            if missing_features:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "Missing required features",
+                        "missing_features": missing_features
+                    }
+                )
+
+            if unexpected_features:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "Unexpected features",
+                        "unexpected_features": unexpected_features
+                    }
+                )
+
+            input_data = input_data[expected_features]
+
+        prediction = model.predict(input_data)[0]
+
+        probabilities = {}
+
+        if hasattr(model, "predict_proba"):
+            probability_values = model.predict_proba(input_data)[0]
+            classes = getattr(model, "classes_", None)
+
+            if classes is not None:
+                probabilities = {
+                    str(cls): float(probability)
+                    for cls, probability in zip(
+                        classes,
+                        probability_values
+                    )
+                }
+
+        return {
+            "prediction": prediction.item()
+            if hasattr(prediction, "item")
+            else prediction,
+            "probabilities": probabilities
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(exc)}"
+        )
